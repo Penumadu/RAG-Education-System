@@ -236,6 +236,19 @@ class RAGAgentService:
 
         except Exception as e:
             logger.error("Agent execution error on thread %s: %s", thread_id, e)
+            err_str = str(e)
+            if "Connection refused" in err_str or "ConnectError" in err_str or "11434" in err_str:
+                return {
+                    "answer": (
+                        "⚠️ **Model Provider Connection Error**\n\n"
+                        f"Unable to reach the local Ollama instance at `{self.ollama_url}`.\n\n"
+                        "💡 **Fix:** If running in the cloud (Railway) or your local Ollama is offline, "
+                        "please enter a **Google Gemini API Key** in the sidebar Settings tab or prompt above to switch to cloud inference instantly."
+                    ),
+                    "citations": [],
+                    "thread_id": thread_id,
+                    "error": err_str,
+                }
             return {
                 "answer": f"An error occurred while processing your question: {e}",
                 "citations": [],

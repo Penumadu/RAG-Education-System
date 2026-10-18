@@ -55,6 +55,20 @@ def sanitize_text(text: str) -> str:
     return text.strip()
 
 
+def check_ollama_status(ollama_url: str = DEFAULT_OLLAMA_URL, timeout: float = 0.8) -> bool:
+    """Probe if Ollama daemon is reachable and responding."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            f"{ollama_url.rstrip('/')}/api/tags",
+            headers={"User-Agent": "RAG-Engine"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
 class RAGEngine:
     """Core RAG engine managing document ingestion and vector retrieval."""
 

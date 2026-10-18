@@ -27,7 +27,7 @@ importlib.reload(_rag_engine_mod)
 importlib.reload(_agent_mod)
 
 from agent import RAGAgentService
-from rag_engine import DocumentProcessingError, RAGEngine
+from rag_engine import DocumentProcessingError, RAGEngine, check_ollama_status
 
 load_dotenv()
 
@@ -430,7 +430,7 @@ st.markdown(
 )
 
 # Cache version — bump to force singleton re-creation when needed
-_CACHE_VERSION = "v15"
+_CACHE_VERSION = "v16"
 
 
 @st.cache_resource(show_spinner="Initializing vector store and RAG engine...")
@@ -461,6 +461,14 @@ if not hasattr(rag_engine, "get_indexed_documents"):
     st.rerun()
 
 agent_service = get_agent_service(rag_engine, _v=_CACHE_VERSION)
+
+@st.cache_data(ttl=15)
+def is_ollama_reachable() -> bool:
+    return check_ollama_status(os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
+
+has_gemini = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+ollama_online = is_ollama_reachable()
+model_service_available = has_gemini or ollama_online
 
 # --------------- State management ---------------
 if "indexed_files" not in st.session_state or not isinstance(st.session_state.get("indexed_files"), dict):
@@ -760,14 +768,19 @@ active_docs = len(st.session_state["indexed_files"])
 total_chunks = rag_engine.document_count
 
 # Capture chat input or pending prompt before rendering sidebar so search history is immediately updated
-placeholder_text = (
-    "Ask Professor AI anything from your course materials..."
-    if active_docs > 0
-    else "Upload a PDF first via the sidebar to start asking questions..."
-)
+if not model_service_available:
+    placeholder_text = "Local Ollama is offline. Connect your Google Gemini API key above to chat..."
+    chat_disabled = True
+elif active_docs == 0:
+    placeholder_text = "Upload a PDF first via the sidebar to start asking questions..."
+    chat_disabled = True
+else:
+    placeholder_text = "Ask Professor AI anything from your course materials..."
+    chat_disabled = False
+
 chat_input_val = st.chat_input(
     placeholder=placeholder_text,
-    disabled=(active_docs == 0),
+    disabled=chat_disabled,
 )
 
 user_query = chat_input_val or (st.session_state.pop("pending_prompt", None))
@@ -869,7 +882,9 @@ with st.sidebar:
         )
 
         if st.button(":material/bolt: Index New Documents", type="primary", width="stretch"):
-            if not uploaded_files:
+            if not model_service_available:
+                st.error("Local Ollama model is offline. Please connect your Google Gemini API Key in the prompt or Settings tab to index documents.", icon=":material/key:")
+            elif not uploaded_files:
                 st.warning("Please choose at least one PDF file to upload.", icon=":material/warning:")
             else:
                 progress_bar = st.progress(0.0, text="Preparing documents...")
@@ -1037,6 +1052,48 @@ st.markdown(
     </div>""",
     unsafe_allow_html=True,
 )
+
+if not model_service_available:
+    st.markdown(
+        """<div style="background: rgba(234, 67, 53, 0.08); border: 1px solid rgba(234, 67, 53, 0.25); border-radius: 16px; padding: 20px 24px; margin: 16px 0 20px 0;">
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">
+                <span style="font-size: 22px;">⚡</span>
+                <span style="font-size: 16px; font-weight: 600; color: #f28b82;">Local Ollama Model is Not Available</span>
+            </div>
+            <p style="color: #c4c7c5; font-size: 13.5px; margin: 0; line-height: 1.5;">
+                Professor AI cannot connect to a local Ollama server at <code>http://localhost:11434</code>.
+                To activate cloud inference without running Ollama locally, please connect your <b>Google Gemini API Key</b> below.
+            </p>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+    with st.container(border=True):
+        st.markdown("##### :material/key: Connect Google Gemini Cloud Agent")
+        st.caption("Get a free API key in seconds at [Google AI Studio](https://aistudio.google.com/app/apikey).")
+        k_col, b_col, l_col = st.columns([3, 1.5, 1.5])
+        with k_col:
+            main_gemini_input = st.text_input(
+                "Gemini API Key",
+                type="password",
+                placeholder="Paste AIzaSy... key here",
+                label_visibility="collapsed",
+                key="main_gemini_key_input",
+            )
+        with b_col:
+            if st.button(":material/bolt: Activate Gemini", type="primary", width="stretch"):
+                if main_gemini_input.strip():
+                    os.environ["GEMINI_API_KEY"] = main_gemini_input.strip()
+                    st.cache_resource.clear()
+                    st.toast("Google Gemini Agent activated successfully!", icon=":material/check_circle:")
+                    st.rerun()
+                else:
+                    st.warning("Please paste a valid key.")
+        with l_col:
+            st.link_button(
+                ":material/open_in_new: Get Free Key",
+                "https://aistudio.google.com/app/apikey",
+                width="stretch",
+            )
 
 # 1. Gemini Welcome State (only visible when there is no active conversation)
 if not has_conversation and active_docs > 0:
