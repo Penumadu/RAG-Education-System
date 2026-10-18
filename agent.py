@@ -15,7 +15,7 @@ from langchain_core.tools import tool
 from langchain_ollama import ChatOllama
 from langgraph.checkpoint.memory import MemorySaver
 
-from rag_engine import RAGEngine, RetrievedChunk
+from rag_engine import RAGEngine, RetrievedChunk, check_ollama_status
 
 logger = logging.getLogger(__name__)
 
@@ -82,12 +82,20 @@ class RAGAgentService:
         self._tools = self._build_tools()
         self._middleware = self._build_middleware()
 
-        # Initialize LLM based on available provider credentials
+        provider_setting = os.getenv("LLM_PROVIDER", "").lower()
         use_gemini_only = os.getenv("USE_GEMINI_ONLY", "").lower() in ("true", "1", "yes") or bool(os.getenv("RAILWAY_ENVIRONMENT"))
         gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
         self.gemini_api_key = gemini_api_key
-        if use_gemini_only or gemini_api_key:
+        if use_gemini_only or provider_setting == "gemini":
+            use_gemini = True
+        elif provider_setting == "ollama":
+            use_gemini = False
+        else:
+            ollama_up = check_ollama_status(self.ollama_url)
+            use_gemini = (not ollama_up and bool(gemini_api_key))
+
+        if use_gemini:
             self.provider = "gemini"
             raw_chat_model = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.5-flash")
             if "gemini-2.0-flash" in raw_chat_model:

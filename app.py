@@ -431,7 +431,7 @@ st.markdown(
 )
 
 # Cache version — bump to force singleton re-creation when needed
-_CACHE_VERSION = "v23"
+_CACHE_VERSION = "v24"
 
 
 @st.cache_resource(show_spinner="Initializing vector store and RAG engine...")
@@ -1144,18 +1144,29 @@ with st.sidebar:
 
         st.space("small")
         st.markdown("##### Provider Configuration")
+        if not is_railway:
+            curr_prov = os.getenv("LLM_PROVIDER", "ollama").lower()
+            prov_choice = st.radio(
+                "Active Provider",
+                options=["Local Ollama (Offline)", "Google Gemini (Cloud)"],
+                index=0 if curr_prov == "ollama" else 1,
+                help="Choose whether to infer locally with Ollama or in the cloud with Gemini.",
+            )
+
         current_gemini = os.getenv("GEMINI_API_KEY", "")
         gemini_input = st.text_input(
             "Google Gemini API Key",
-            value=current_gemini,
+            value=current_gemini if not current_gemini.startswith("your_") else "",
             type="password",
             placeholder="AIzaSy...",
             help="Provide your Google Gemini API key to enable cloud embeddings (gemini-embedding-001) and chat (gemini-2.5-flash).",
         )
         if st.button(":material/save: Save & Apply Provider", width="stretch"):
-            if gemini_input.strip():
+            if not is_railway:
+                os.environ["LLM_PROVIDER"] = "ollama" if "Ollama" in prov_choice else "gemini"
+            if gemini_input.strip() and not gemini_input.startswith("your_"):
                 os.environ["GEMINI_API_KEY"] = gemini_input.strip()
-            else:
+            elif not gemini_input.strip():
                 os.environ.pop("GEMINI_API_KEY", None)
             st.cache_resource.clear()
             st.toast("Provider configuration updated! Reloading...", icon=":material/check_circle:")
