@@ -271,10 +271,22 @@ class RAGEngine:
 
         if indexed_count == 0 and total_chunks > 0:
             err_details = f" ({last_error})" if last_error else ""
-            raise DocumentProcessingError(
-                f"Failed to index '{filename}'. Unable to connect to embedding service at '{self.ollama_url}'{err_details}. "
-                "Ensure your LLM/embedding provider is running and reachable from the server."
-            )
+            if self.provider == "gemini":
+                err_text = str(last_error) if last_error else ""
+                if "API_KEY_INVALID" in err_text or "API key not valid" in err_text:
+                    raise DocumentProcessingError(
+                        f"Failed to index '{filename}'. The Google Gemini API key is invalid (API_KEY_INVALID). "
+                        "Please provide a valid Gemini API key from https://aistudio.google.com/app/apikey (Google API keys start with 'AIzaSy')."
+                    )
+                raise DocumentProcessingError(
+                    f"Failed to index '{filename}'. Google Gemini embedding service error{err_details}. "
+                    "Ensure your GEMINI_API_KEY environment variable is set to a valid key in Railway."
+                )
+            else:
+                raise DocumentProcessingError(
+                    f"Failed to index '{filename}'. Unable to connect to embedding service at '{self.ollama_url}'{err_details}. "
+                    "Ensure your LLM/embedding provider is running and reachable from the server."
+                )
 
         logger.info("Successfully indexed %d/%d chunks from '%s'", indexed_count, total_chunks, filename)
         return indexed_count

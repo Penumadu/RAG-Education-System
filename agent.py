@@ -247,6 +247,20 @@ class RAGAgentService:
         except Exception as e:
             logger.error("Agent execution error on thread %s: %s", thread_id, e)
             err_str = str(e)
+            if "API_KEY_INVALID" in err_str or "API key not valid" in err_str:
+                return {
+                    "answer": (
+                        "⚠️ **Invalid Google Gemini API Key**\n\n"
+                        "Google rejected the API key (`400 API_KEY_INVALID`).\n\n"
+                        "💡 **How to fix:**\n"
+                        "1. Generate a free API key at [Google AI Studio](https://aistudio.google.com/app/apikey).\n"
+                        "2. Note: Valid Gemini API keys always start with `AIzaSy...` (39 characters).\n"
+                        "3. Update `GEMINI_API_KEY` in your Railway Variables or in the sidebar Settings tab."
+                    ),
+                    "citations": [],
+                    "thread_id": thread_id,
+                    "error": err_str,
+                }
             if "Connection refused" in err_str or "ConnectError" in err_str or "11434" in err_str:
                 return {
                     "answer": (
