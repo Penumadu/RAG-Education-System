@@ -962,24 +962,69 @@ with st.sidebar:
             label_visibility="collapsed",
         )
 
+        already_indexed_files: list[dict] = []
+        new_files_to_index: list[str] = []
+
+        if uploaded_files:
+            for u_file in uploaded_files:
+                file_bytes = u_file.getvalue()
+                match = rag_engine.check_document_status(u_file.name, file_bytes=file_bytes)
+                if match:
+                    already_indexed_files.append({
+                        "name": u_file.name,
+                        "matched_by": match["matched_by"],
+                        "matched_name": match["filename"],
+                        "chunks": match["chunk_count"],
+                        "pages": match["page_count"],
+                    })
+                else:
+                    new_files_to_index.append(u_file.name)
+
+            if already_indexed_files:
+                for item in already_indexed_files:
+                    if item["matched_by"] == "filename":
+                        st.info(
+                            f"ℹ️ **'{item['name']}' is already in your knowledge base** "
+                            f"({item['pages']} pages, {item['chunks']} chunks). No need to re-index!",
+                            icon=":material/inventory_2:",
+                        )
+                    else:
+                        st.info(
+                            f"ℹ️ **'{item['name']}'** has identical content to **'{item['matched_name']}'**, "
+                            f"which is already in your knowledge base ({item['chunks']} chunks).",
+                            icon=":material/inventory_2:",
+                        )
+
+            if not new_files_to_index and already_indexed_files:
+                st.success(
+                    "All uploaded documents are already part of your knowledge base. You can ask questions about them right now!",
+                    icon=":material/task_alt:",
+                )
+
         if st.button(":material/bolt: Index New Documents", type="primary", width="stretch"):
             if not model_service_available:
                 st.error("Google Gemini API Key is required to index documents on Railway. Please enter it in the Settings tab or above.", icon=":material/key:")
             elif not uploaded_files:
                 st.warning("Please choose at least one PDF file to upload.", icon=":material/warning:")
+            elif not new_files_to_index and already_indexed_files:
+                st.info(
+                    "**Already in Knowledge Base**: All uploaded document(s) are already indexed. No re-indexing needed!",
+                    icon=":material/check_circle:",
+                )
+                st.toast("Document(s) already exist in your knowledge base.", icon=":material/info:")
             else:
                 progress_bar = st.progress(0.0, text="Preparing documents...")
                 total_new_chunks = 0
                 skipped_files: list[str] = []
-                indexed_files_current = st.session_state["indexed_files"]
 
                 for i, u_file in enumerate(uploaded_files):
                     fn = u_file.name
-                    if fn in indexed_files_current:
+                    file_bytes = u_file.getvalue()
+
+                    match = rag_engine.check_document_status(fn, file_bytes=file_bytes)
+                    if match:
                         skipped_files.append(fn)
                         continue
-
-                    file_bytes = u_file.read()
 
                     def _on_progress(processed: int, total: int, message: str) -> None:
                         pct = min(1.0, processed / max(1, total))
@@ -999,17 +1044,17 @@ with st.sidebar:
                         st.error(f"Error processing '{fn}': {e}", icon=":material/error:")
 
                 progress_bar.empty()
-
                 st.session_state["indexed_files"] = rag_engine.get_indexed_documents()
 
-                if skipped_files:
+                if skipped_files and total_new_chunks > 0:
                     st.info(
-                        f"Skipped {len(skipped_files)} already-indexed file(s): {', '.join(skipped_files)}",
+                        f"Skipped already-indexed file(s): {', '.join(skipped_files)}",
                         icon=":material/info:",
                     )
                 if total_new_chunks > 0:
+                    indexed_count = len(uploaded_files) - len(skipped_files)
                     st.toast(
-                        f"Indexed {len(uploaded_files) - len(skipped_files)} document(s) ({total_new_chunks} chunks).",
+                        f"Indexed {indexed_count} document(s) ({total_new_chunks} chunks).",
                         icon=":material/check_circle:",
                     )
                     st.rerun()

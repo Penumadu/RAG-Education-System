@@ -148,13 +148,19 @@ class RAGEngine:
     def extract_text_from_pdf(self, file_path_or_bytes: str | bytes, filename: str) -> List[Document]:
         """Extract pages from a PDF into LangChain Documents with error handling."""
         documents: List[Document] = []
+        file_hash = ""
         try:
             if isinstance(file_path_or_bytes, bytes):
+                import hashlib
                 import io
 
+                file_hash = hashlib.sha256(file_path_or_bytes).hexdigest()[:16]
                 stream = io.BytesIO(file_path_or_bytes)
                 reader = PdfReader(stream)
             else:
+                import hashlib
+                with open(file_path_or_bytes, "rb") as f:
+                    file_hash = hashlib.sha256(f.read()).hexdigest()[:16]
                 reader = PdfReader(file_path_or_bytes)
 
             if reader.is_encrypted:
@@ -180,6 +186,7 @@ class RAGEngine:
                                 "source": filename,
                                 "page": page_idx,
                                 "total_pages": total_pages,
+                                "file_hash": file_hash,
                             },
                         )
                     )
@@ -205,11 +212,25 @@ class RAGEngine:
         file_path_or_bytes: str | bytes,
         filename: str,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        skip_if_exists: bool = True,
     ) -> int:
         """
         Parse, chunk, and index a PDF file into the vector store.
         Embeds chunks in controlled batches to avoid Ollama runner/tokenizer buffer overflows.
+        If skip_if_exists is True and the document is already in the vector store, returns 0 immediately.
         """
+        if skip_if_exists:
+            bytes_to_check = file_path_or_bytes if isinstance(file_path_or_bytes, bytes) else None
+            status = self.check_document_status(filename, file_bytes=bytes_to_check)
+            if status:
+                logger.info(
+                    "Document '%s' already indexed (%s match: %s). Skipping duplicate ingestion.",
+                    filename,
+                    status["matched_by"],
+                    status["filename"],
+                )
+                return 0
+
         docs = self.extract_text_from_pdf(file_path_or_bytes, filename)
         raw_chunks = self.text_splitter.split_documents(docs)
 
@@ -332,7 +353,7 @@ class RAGEngine:
     def get_indexed_documents(self) -> Dict[str, Dict[str, Any]]:
         """
         Return a summary of all documents currently persisted in the vector store.
-        Returns a mapping of filename -> {"chunk_count": int, "page_count": int, "min_page": int, "max_page": int}.
+        Returns a mapping of filename -> {"chunk_count": int, "page_count": int, "min_page": int, "max_page": int, "file_hash": str}.
         """
         if self.document_count == 0:
             return {}
@@ -350,10 +371,13 @@ class RAGEngine:
                         "chunk_count": 0,
                         "pages": set(),
                         "total_pages": int(meta.get("total_pages", 1)),
+                        "file_hash": str(meta.get("file_hash", "")),
                     }
                 docs[source]["chunk_count"] += 1
                 if "page" in meta:
                     docs[source]["pages"].add(int(meta["page"]))
+                if "file_hash" in meta and not docs[source]["file_hash"]:
+                    docs[source]["file_hash"] = str(meta["file_hash"])
 
             summary: Dict[str, Dict[str, Any]] = {}
             for source, data in docs.items():
@@ -363,11 +387,47 @@ class RAGEngine:
                     "page_count": len(pages_list) if pages_list else data["total_pages"],
                     "min_page": pages_list[0] if pages_list else 1,
                     "max_page": pages_list[-1] if pages_list else data["total_pages"],
+                    "file_hash": data.get("file_hash", ""),
                 }
             return summary
         except Exception as e:
             logger.error("Failed to query indexed documents from vector store: %s", e)
             return {}
+
+    def check_document_status(
+        self, filename: str, file_bytes: Optional[bytes] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Check if a document is already indexed in the vector store by filename or content hash.
+        Returns match dict if already present, or None if new.
+        """
+        indexed = self.get_indexed_documents()
+        if not indexed:
+            return None
+
+        # 1. Exact filename match
+        if filename in indexed:
+            return {
+                "matched_by": "filename",
+                "filename": filename,
+                "chunk_count": indexed[filename]["chunk_count"],
+                "page_count": indexed[filename]["page_count"],
+            }
+
+        # 2. Content hash match (detects renamed identical documents)
+        if file_bytes:
+            import hashlib
+            file_hash = hashlib.sha256(file_bytes).hexdigest()[:16]
+            for existing_fn, info in indexed.items():
+                if info.get("file_hash") and info.get("file_hash") == file_hash:
+                    return {
+                        "matched_by": "hash",
+                        "filename": existing_fn,
+                        "chunk_count": info["chunk_count"],
+                        "page_count": info["page_count"],
+                    }
+
+        return None
 
     def get_document_names(self) -> List[str]:
         """Return a sorted list of unique document filenames present in the vector store."""
