@@ -431,7 +431,7 @@ st.markdown(
 )
 
 # Cache version — bump to force singleton re-creation when needed
-_CACHE_VERSION = "v22"
+_CACHE_VERSION = "v23"
 
 
 @st.cache_resource(show_spinner="Initializing vector store and RAG engine...")
@@ -1150,7 +1150,7 @@ with st.sidebar:
             value=current_gemini,
             type="password",
             placeholder="AIzaSy...",
-            help="Provide your Google Gemini API key to enable cloud embeddings (gemini-embedding-001) and chat (gemini-2.0-flash).",
+            help="Provide your Google Gemini API key to enable cloud embeddings (gemini-embedding-001) and chat (gemini-2.5-flash).",
         )
         if st.button(":material/save: Save & Apply Provider", width="stretch"):
             if gemini_input.strip():

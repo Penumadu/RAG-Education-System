@@ -86,9 +86,20 @@ class RAGAgentService:
         use_gemini_only = os.getenv("USE_GEMINI_ONLY", "").lower() in ("true", "1", "yes") or bool(os.getenv("RAILWAY_ENVIRONMENT"))
         gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
+        self.gemini_api_key = gemini_api_key
         if use_gemini_only or gemini_api_key:
             self.provider = "gemini"
-            chat_model_name = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.0-flash")
+            raw_chat_model = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.5-flash")
+            if "gemini-2.0-flash" in raw_chat_model:
+                logger.warning(
+                    "GEMINI_CHAT_MODEL='%s' is retired by Google (404 NOT_FOUND). "
+                    "Auto-upgrading to 'gemini-2.5-flash'.",
+                    raw_chat_model,
+                )
+                chat_model_name = "gemini-2.5-flash"
+            else:
+                chat_model_name = raw_chat_model
+
             self.model_name = chat_model_name
             if gemini_api_key:
                 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -247,6 +258,45 @@ class RAGAgentService:
         except Exception as e:
             logger.error("Agent execution error on thread %s: %s", thread_id, e)
             err_str = str(e)
+
+            # Resilient auto-fallback if configured Gemini chat model returned 404 / retired
+            if self.provider == "gemini" and self.gemini_api_key and ("404" in err_str or "NOT_FOUND" in err_str or "no longer available" in err_str):
+                fallback_models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-2.5-pro", "gemini-1.5-pro"]
+                for candidate in fallback_models:
+                    if candidate != self.model_name:
+                        try:
+                            logger.info("Attempting automatic fallback to Gemini chat model '%s'...", candidate)
+                            from langchain_google_genai import ChatGoogleGenerativeAI
+                            self.model_name = candidate
+                            self.llm = ChatGoogleGenerativeAI(
+                                model=candidate,
+                                google_api_key=self.gemini_api_key,
+                                temperature=0.0,
+                            )
+                            self.agent = create_agent(
+                                model=self.llm,
+                                tools=self._tools,
+                                system_prompt=SYSTEM_PROMPT,
+                                checkpointer=self.checkpointer,
+                                middleware=self._middleware,
+                            )
+                            result = self.agent.invoke(
+                                {"messages": [HumanMessage(content=user_question)]},
+                                config=config,
+                            )
+                            messages = result.get("messages", [])
+                            final_msg = messages[-1] if messages else None
+                            if final_msg:
+                                ans_text = final_msg.content if isinstance(final_msg.content, str) else str(final_msg.content)
+                                return {
+                                    "answer": ans_text.strip(),
+                                    "citations": list(self._latest_citations),
+                                    "thread_id": thread_id,
+                                }
+                        except Exception as fallback_err:
+                            logger.warning("Fallback model '%s' also failed: %s", candidate, fallback_err)
+                            continue
+
             if "API_KEY_INVALID" in err_str or "API key not valid" in err_str:
                 return {
                     "answer": (
