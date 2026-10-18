@@ -430,7 +430,7 @@ st.markdown(
 )
 
 # Cache version — bump to force singleton re-creation when needed
-_CACHE_VERSION = "v14"
+_CACHE_VERSION = "v15"
 
 
 @st.cache_resource(show_spinner="Initializing vector store and RAG engine...")
@@ -851,6 +851,15 @@ with st.sidebar:
         st.markdown("##### Upload PDF Documents")
         st.caption("Upload course PDFs. Vectors are automatically saved to persistent ChromaDB.")
 
+        if getattr(rag_engine, "provider", "ollama") == "gemini":
+            st.success("Connected to **Google Gemini AI** for cloud embeddings & inference.", icon=":material/cloud_done:")
+        elif os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("PORT"):
+            st.info(
+                "**Cloud Mode**: Using local Ollama default (`http://localhost:11434`). "
+                "To index documents in the cloud without running Ollama, add `GEMINI_API_KEY` in the **Settings** tab below or in Railway Variables.",
+                icon=":material/info:",
+            )
+
         uploaded_files = st.file_uploader(
             "Select PDF files",
             type=["pdf"],
@@ -979,8 +988,29 @@ with st.sidebar:
             st.rerun()
 
         st.space("small")
+        st.markdown("##### Provider Configuration")
+        current_gemini = os.getenv("GEMINI_API_KEY", "")
+        gemini_input = st.text_input(
+            "Google Gemini API Key",
+            value=current_gemini,
+            type="password",
+            placeholder="AIzaSy...",
+            help="Provide your Google Gemini API key to enable cloud embeddings (text-embedding-004) and chat (gemini-2.0-flash).",
+        )
+        if st.button(":material/save: Save & Apply Provider", width="stretch"):
+            if gemini_input.strip():
+                os.environ["GEMINI_API_KEY"] = gemini_input.strip()
+            else:
+                os.environ.pop("GEMINI_API_KEY", None)
+            st.cache_resource.clear()
+            st.toast("Provider configuration updated! Reloading...", icon=":material/check_circle:")
+            st.rerun()
+
+        st.space("small")
         st.markdown("##### Infrastructure Specs")
+        provider_name = "Google Gemini AI" if getattr(rag_engine, "provider", "ollama") == "gemini" else "Local Ollama"
         st.caption(
+            f":material/cloud: **Provider:** `{provider_name}`\n\n"
             f":material/smart_toy: **LLM Model:** `{agent_service.model_name}`\n\n"
             f":material/search: **Embedding Model:** `{rag_engine.embed_model}`\n\n"
             f":material/folder_open: **Storage Path:** `{rag_engine.persist_directory}`\n\n"

@@ -5,6 +5,7 @@ LangChain RAG Agent Harness: Tools, Middleware, Guardrails, and Memory Managemen
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from langchain.agents import create_agent
@@ -81,12 +82,28 @@ class RAGAgentService:
         self._tools = self._build_tools()
         self._middleware = self._build_middleware()
 
-        # Initialize LLM
-        self.llm = ChatOllama(
-            model=self.model_name,
-            base_url=self.ollama_url,
-            temperature=0.0,  # Zero temperature for deterministic, factual output
-        )
+        # Initialize LLM based on available provider credentials
+        gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if gemini_api_key:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+
+            chat_model_name = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.0-flash")
+            self.model_name = chat_model_name
+            logger.info("Using Google Generative AI LLM (%s)", chat_model_name)
+            self.llm = ChatGoogleGenerativeAI(
+                model=chat_model_name,
+                google_api_key=gemini_api_key,
+                temperature=0.0,
+            )
+            self.provider = "gemini"
+        else:
+            logger.info("Using Ollama Chat (%s) at %s", self.model_name, self.ollama_url)
+            self.llm = ChatOllama(
+                model=self.model_name,
+                base_url=self.ollama_url,
+                temperature=0.0,  # Zero temperature for deterministic, factual output
+            )
+            self.provider = "ollama"
 
         # Initialize Agent Harness
         self.agent = create_agent(

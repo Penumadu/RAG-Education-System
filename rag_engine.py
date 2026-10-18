@@ -74,10 +74,25 @@ class RAGEngine:
         self.relevance_threshold = relevance_threshold
         self.batch_size = batch_size
 
-        self.embeddings = OllamaEmbeddings(
-            model=self.embed_model,
-            base_url=self.ollama_url,
-        )
+        gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if gemini_api_key:
+            from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+            embed_model_name = os.getenv("GEMINI_EMBED_MODEL", "models/text-embedding-004")
+            self.embed_model = embed_model_name
+            logger.info("Using Google Generative AI Embeddings (%s)", embed_model_name)
+            self.embeddings = GoogleGenerativeAIEmbeddings(
+                model=embed_model_name,
+                google_api_key=gemini_api_key,
+            )
+            self.provider = "gemini"
+        else:
+            logger.info("Using Ollama Embeddings (%s) at %s", self.embed_model, self.ollama_url)
+            self.embeddings = OllamaEmbeddings(
+                model=self.embed_model,
+                base_url=self.ollama_url,
+            )
+            self.provider = "ollama"
 
         self.vector_store = Chroma(
             collection_name=self.collection_name,
@@ -187,12 +202,14 @@ class RAGEngine:
         indexed_count = 0
         batch_size = max(1, self.batch_size)
 
+        last_error: Optional[Exception] = None
         for i in range(0, total_chunks, batch_size):
             batch = chunks[i : i + batch_size]
             try:
                 self.vector_store.add_documents(batch)
                 indexed_count += len(batch)
             except Exception as batch_error:
+                last_error = batch_error
                 logger.warning(
                     "Batch insertion failed for chunks %d-%d of '%s': %s. Retrying item-by-item...",
                     i,
@@ -206,6 +223,7 @@ class RAGEngine:
                         self.vector_store.add_documents([single_chunk])
                         indexed_count += 1
                     except Exception as single_error:
+                        last_error = single_error
                         logger.error(
                             "Skipping corrupt or un-indexable chunk on page %s of '%s': %s",
                             single_chunk.metadata.get("page"),
@@ -219,6 +237,13 @@ class RAGEngine:
                     total_chunks,
                     f"Indexing '{filename}': {min(i + len(batch), total_chunks)}/{total_chunks} chunks...",
                 )
+
+        if indexed_count == 0 and total_chunks > 0:
+            err_details = f" ({last_error})" if last_error else ""
+            raise DocumentProcessingError(
+                f"Failed to index '{filename}'. Unable to connect to embedding service at '{self.ollama_url}'{err_details}. "
+                "Ensure your LLM/embedding provider is running and reachable from the server."
+            )
 
         logger.info("Successfully indexed %d/%d chunks from '%s'", indexed_count, total_chunks, filename)
         return indexed_count
