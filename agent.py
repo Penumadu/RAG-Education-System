@@ -83,19 +83,29 @@ class RAGAgentService:
         self._middleware = self._build_middleware()
 
         # Initialize LLM based on available provider credentials
+        use_gemini_only = os.getenv("USE_GEMINI_ONLY", "").lower() in ("true", "1", "yes") or bool(os.getenv("RAILWAY_ENVIRONMENT"))
         gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        if gemini_api_key:
-            from langchain_google_genai import ChatGoogleGenerativeAI
 
+        if use_gemini_only or gemini_api_key:
+            self.provider = "gemini"
             chat_model_name = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.0-flash")
             self.model_name = chat_model_name
-            logger.info("Using Google Generative AI LLM (%s)", chat_model_name)
-            self.llm = ChatGoogleGenerativeAI(
-                model=chat_model_name,
-                google_api_key=gemini_api_key,
-                temperature=0.0,
-            )
-            self.provider = "gemini"
+            if gemini_api_key:
+                from langchain_google_genai import ChatGoogleGenerativeAI
+
+                logger.info("Using Google Generative AI LLM (%s)", chat_model_name)
+                self.llm = ChatGoogleGenerativeAI(
+                    model=chat_model_name,
+                    google_api_key=gemini_api_key,
+                    temperature=0.0,
+                )
+            else:
+                logger.warning("Gemini provider selected on Railway/Cloud, but GEMINI_API_KEY is not yet set.")
+                from langchain_core.language_models.fake import FakeListLLM
+
+                self.llm = FakeListLLM(
+                    responses=["GEMINI_API_KEY is required on Railway. Please enter your key in Railway Variables or the UI."]
+                )
         else:
             logger.info("Using Ollama Chat (%s) at %s", self.model_name, self.ollama_url)
             self.llm = ChatOllama(

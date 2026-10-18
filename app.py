@@ -431,7 +431,7 @@ st.markdown(
 )
 
 # Cache version — bump to force singleton re-creation when needed
-_CACHE_VERSION = "v18"
+_CACHE_VERSION = "v19"
 
 
 @st.cache_resource(show_spinner="Initializing vector store and RAG engine...")
@@ -463,13 +463,24 @@ if not hasattr(rag_engine, "get_indexed_documents"):
 
 agent_service = get_agent_service(rag_engine, _v=_CACHE_VERSION)
 
-@st.cache_data(ttl=15)
-def is_ollama_reachable() -> bool:
-    return check_ollama_status(os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
-
+is_railway = bool(
+    os.getenv("RAILWAY_ENVIRONMENT")
+    or os.getenv("USE_GEMINI_ONLY", "").lower() in ("true", "1", "yes")
+    or os.getenv("PORT")
+)
 has_gemini = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
-ollama_online = is_ollama_reachable()
-model_service_available = has_gemini or ollama_online
+
+if is_railway:
+    # On Railway: strictly Gemini only. Never probe or attempt local Ollama.
+    model_service_available = has_gemini
+    ollama_online = False
+else:
+    @st.cache_data(ttl=15)
+    def is_ollama_reachable() -> bool:
+        return check_ollama_status(os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
+
+    ollama_online = is_ollama_reachable()
+    model_service_available = has_gemini or ollama_online
 
 # --------------- State management ---------------
 if "indexed_files" not in st.session_state or not isinstance(st.session_state.get("indexed_files"), dict):
@@ -936,11 +947,11 @@ with st.sidebar:
 
         if getattr(rag_engine, "provider", "ollama") == "gemini":
             st.success("Connected to **Google Gemini AI** for cloud embeddings & inference.", icon=":material/cloud_done:")
-        elif os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("PORT"):
-            st.info(
-                "**Cloud Mode**: Using local Ollama default (`http://localhost:11434`). "
-                "To index documents in the cloud without running Ollama, add `GEMINI_API_KEY` in the **Settings** tab below or in Railway Variables.",
-                icon=":material/info:",
+        elif is_railway:
+            st.warning(
+                "**Railway Cloud Deployment**: Runs exclusively with Google Gemini. "
+                "Add `GEMINI_API_KEY` to your Railway Variables or enter it in the **Settings** tab below.",
+                icon=":material/cloud_upload:",
             )
 
         uploaded_files = st.file_uploader(
@@ -953,7 +964,7 @@ with st.sidebar:
 
         if st.button(":material/bolt: Index New Documents", type="primary", width="stretch"):
             if not model_service_available:
-                st.error("Local Ollama model is offline. Please connect your Google Gemini API Key in the prompt or Settings tab to index documents.", icon=":material/key:")
+                st.error("Google Gemini API Key is required to index documents on Railway. Please enter it in the Settings tab or above.", icon=":material/key:")
             elif not uploaded_files:
                 st.warning("Please choose at least one PDF file to upload.", icon=":material/warning:")
             else:
@@ -1124,15 +1135,22 @@ st.markdown(
 )
 
 if not model_service_available:
+    banner_title = "Google Gemini API Key Required on Railway" if is_railway else "Local Ollama Model is Not Available"
+    banner_desc = (
+        "Railway runs 100% in the cloud and uses Google Gemini exclusively. "
+        "Please connect your <b>Google Gemini API Key</b> below or add <code>GEMINI_API_KEY</code> to your Railway Variables."
+        if is_railway else
+        "Professor AI cannot connect to a local Ollama server at <code>http://localhost:11434</code>. "
+        "To activate cloud inference without running Ollama locally, please connect your <b>Google Gemini API Key</b> below."
+    )
     st.markdown(
-        """<div style="background: rgba(234, 67, 53, 0.08); border: 1px solid rgba(234, 67, 53, 0.25); border-radius: 16px; padding: 20px 24px; margin: 16px 0 20px 0;">
+        f"""<div style="background: rgba(234, 67, 53, 0.08); border: 1px solid rgba(234, 67, 53, 0.25); border-radius: 16px; padding: 20px 24px; margin: 16px 0 20px 0;">
             <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 6px;">
                 <span style="font-size: 22px;">⚡</span>
-                <span style="font-size: 16px; font-weight: 600; color: #f28b82;">Local Ollama Model is Not Available</span>
+                <span style="font-size: 16px; font-weight: 600; color: #f28b82;">{banner_title}</span>
             </div>
             <p style="color: #c4c7c5; font-size: 13.5px; margin: 0; line-height: 1.5;">
-                Professor AI cannot connect to a local Ollama server at <code>http://localhost:11434</code>.
-                To activate cloud inference without running Ollama locally, please connect your <b>Google Gemini API Key</b> below.
+                {banner_desc}
             </p>
         </div>""",
         unsafe_allow_html=True,

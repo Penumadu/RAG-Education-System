@@ -88,18 +88,35 @@ class RAGEngine:
         self.relevance_threshold = relevance_threshold
         self.batch_size = batch_size
 
+        use_gemini_only = os.getenv("USE_GEMINI_ONLY", "").lower() in ("true", "1", "yes") or bool(os.getenv("RAILWAY_ENVIRONMENT"))
         gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        if gemini_api_key:
-            from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
+        if use_gemini_only or gemini_api_key:
+            self.provider = "gemini"
             embed_model_name = os.getenv("GEMINI_EMBED_MODEL", "models/text-embedding-004")
             self.embed_model = embed_model_name
-            logger.info("Using Google Generative AI Embeddings (%s)", embed_model_name)
-            self.embeddings = GoogleGenerativeAIEmbeddings(
-                model=embed_model_name,
-                google_api_key=gemini_api_key,
-            )
-            self.provider = "gemini"
+            if gemini_api_key:
+                from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+                logger.info("Using Google Generative AI Embeddings (%s)", embed_model_name)
+                self.embeddings = GoogleGenerativeAIEmbeddings(
+                    model=embed_model_name,
+                    google_api_key=gemini_api_key,
+                )
+            else:
+                logger.warning("Gemini provider selected on Railway/Cloud, but GEMINI_API_KEY is not yet set.")
+                from langchain_core.embeddings import Embeddings
+
+                class _PendingGeminiEmbeddings(Embeddings):
+                    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+                        raise DocumentProcessingError(
+                            "GEMINI_API_KEY is required on Railway. Please set GEMINI_API_KEY in your Railway service variables or in the app."
+                        )
+
+                    def embed_query(self, text: str) -> list[float]:
+                        return [0.0] * 768
+
+                self.embeddings = _PendingGeminiEmbeddings()
         else:
             logger.info("Using Ollama Embeddings (%s) at %s", self.embed_model, self.ollama_url)
             self.embeddings = OllamaEmbeddings(
