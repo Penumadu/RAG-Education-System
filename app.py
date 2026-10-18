@@ -430,7 +430,7 @@ st.markdown(
 )
 
 # Cache version — bump to force singleton re-creation when needed
-_CACHE_VERSION = "v16"
+_CACHE_VERSION = "v17"
 
 
 @st.cache_resource(show_spinner="Initializing vector store and RAG engine...")
@@ -846,12 +846,6 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # 3. Knowledge Base & Document Repository
-    st.markdown("##### :material/dataset: Knowledge Base")
-    st.caption(":material/verified_user: **Strict Grounding** — answers strictly derived from indexed course PDFs.")
-
-    with st.expander(":material/view_in_ar: 3D Vector Constellation", expanded=False):
-        render_threejs_vector_mesh(height=150)
 
     tab_upload, tab_manage, tab_settings = st.tabs([
         ":material/upload_file: Upload",
