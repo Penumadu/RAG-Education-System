@@ -4,13 +4,14 @@ FROM python:3.13-slim
 # System configuration: unbuffered stdout, no .pyc generation
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PORT=8501 \
     CHROMA_PERSIST_DIR=/app/data/.chroma_data
 
-# Install necessary build tools and curl for container health checks
+# Install build tools, libgomp1 (required by onnxruntime/chromadb), and curl
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
+    libgomp1 \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
