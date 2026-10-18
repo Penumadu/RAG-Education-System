@@ -5,7 +5,8 @@ FROM python:3.13-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     CHROMA_PERSIST_DIR=/app/data/.chroma_data \
-    USE_GEMINI_ONLY=true
+    USE_GEMINI_ONLY=true \
+    GEMINI_EMBED_MODEL=models/gemini-embedding-001
 
 # Install build tools, libgomp1 (required by onnxruntime/chromadb), and curl
 RUN apt-get update && apt-get install -y --no-install-recommends \

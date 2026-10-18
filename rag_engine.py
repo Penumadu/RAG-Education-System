@@ -69,6 +69,68 @@ def check_ollama_status(ollama_url: str = DEFAULT_OLLAMA_URL, timeout: float = 0
         return False
 
 
+class ResilientGeminiEmbeddings:
+    """
+    Resilient Google Generative AI Embeddings with automatic model fallback.
+    Tries preferred model (e.g. models/gemini-embedding-001), and if Google returns 404
+    (e.g. model retired or unsupported), automatically falls back to alternative active models.
+    """
+    def __init__(self, api_key: str, preferred_model: str = "models/gemini-embedding-001"):
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+        self.api_key = api_key
+        # Candidate models to try in order of preference
+        candidates = [
+            preferred_model,
+            "models/gemini-embedding-001",
+            "gemini-embedding-001",
+            "models/embedding-001",
+            "embedding-001",
+        ]
+        # Filter out retired text-embedding-004 and deduplicate
+        self.candidate_models = []
+        for m in candidates:
+            if m and "text-embedding-004" not in m and m not in self.candidate_models:
+                self.candidate_models.append(m)
+
+        self.active_model = self.candidate_models[0]
+        logger.info("Initializing Google Generative AI Embeddings with active model: '%s'", self.active_model)
+        self._delegate = GoogleGenerativeAIEmbeddings(
+            model=self.active_model,
+            google_api_key=self.api_key,
+        )
+
+    def _call_with_fallback(self, func_name: str, *args, **kwargs):
+        last_err = None
+        for model in self.candidate_models:
+            try:
+                if self.active_model != model:
+                    from langchain_google_genai import GoogleGenerativeAIEmbeddings
+                    logger.info("Switching to alternative Gemini embedding model: '%s'", model)
+                    self.active_model = model
+                    self._delegate = GoogleGenerativeAIEmbeddings(
+                        model=model,
+                        google_api_key=self.api_key,
+                    )
+                method = getattr(self._delegate, func_name)
+                return method(*args, **kwargs)
+            except Exception as e:
+                err_str = str(e)
+                last_err = e
+                if "404" in err_str or "NOT_FOUND" in err_str or "not found" in err_str.lower():
+                    logger.warning("Gemini embedding model '%s' returned 404 Not Found. Trying fallback...", model)
+                    continue
+                # For non-404 errors (like auth), re-raise immediately
+                raise
+        raise last_err
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self._call_with_fallback("embed_documents", texts)
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._call_with_fallback("embed_query", text)
+
+
 class RAGEngine:
     """Core RAG engine managing document ingestion and vector retrieval."""
 
@@ -93,15 +155,24 @@ class RAGEngine:
 
         if use_gemini_only or gemini_api_key:
             self.provider = "gemini"
-            embed_model_name = os.getenv("GEMINI_EMBED_MODEL", "models/text-embedding-004")
+            raw_model = os.getenv("GEMINI_EMBED_MODEL", "models/gemini-embedding-001")
+            # Automatically upgrade deprecated text-embedding-004
+            if "text-embedding-004" in raw_model:
+                logger.warning(
+                    "GEMINI_EMBED_MODEL='%s' is retired by Google (404 NOT_FOUND). "
+                    "Auto-upgrading to 'models/gemini-embedding-001'.",
+                    raw_model,
+                )
+                embed_model_name = "models/gemini-embedding-001"
+            else:
+                embed_model_name = raw_model
+
             self.embed_model = embed_model_name
             if gemini_api_key:
-                from langchain_google_genai import GoogleGenerativeAIEmbeddings
-
                 logger.info("Using Google Generative AI Embeddings (%s)", embed_model_name)
-                self.embeddings = GoogleGenerativeAIEmbeddings(
-                    model=embed_model_name,
-                    google_api_key=gemini_api_key,
+                self.embeddings = ResilientGeminiEmbeddings(
+                    api_key=gemini_api_key,
+                    preferred_model=embed_model_name,
                 )
             else:
                 logger.warning("Gemini provider selected on Railway/Cloud, but GEMINI_API_KEY is not yet set.")
@@ -298,6 +369,11 @@ class RAGEngine:
                     raise DocumentProcessingError(
                         f"Failed to index '{filename}'. The Google Gemini API key is invalid (API_KEY_INVALID). "
                         "Please provide a valid Gemini API key from https://aistudio.google.com/app/apikey (Google API keys start with 'AIzaSy')."
+                    )
+                if "404" in err_text or "NOT_FOUND" in err_text:
+                    raise DocumentProcessingError(
+                        f"Failed to index '{filename}'. Google Gemini embedding model was not found (404 NOT_FOUND). "
+                        "Google has retired older embedding models. Use 'models/gemini-embedding-001' or 'models/embedding-001'."
                     )
                 raise DocumentProcessingError(
                     f"Failed to index '{filename}'. Google Gemini embedding service error{err_details}. "

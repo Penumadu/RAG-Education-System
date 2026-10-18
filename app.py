@@ -1136,7 +1136,7 @@ with st.sidebar:
             value=current_gemini,
             type="password",
             placeholder="AIzaSy...",
-            help="Provide your Google Gemini API key to enable cloud embeddings (text-embedding-004) and chat (gemini-2.0-flash).",
+            help="Provide your Google Gemini API key to enable cloud embeddings (gemini-embedding-001) and chat (gemini-2.0-flash).",
         )
         if st.button(":material/save: Save & Apply Provider", width="stretch"):
             if gemini_input.strip():
