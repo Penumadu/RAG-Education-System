@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime
 import importlib
+import json
 import os
 import re
 import uuid
@@ -430,7 +431,7 @@ st.markdown(
 )
 
 # Cache version — bump to force singleton re-creation when needed
-_CACHE_VERSION = "v17"
+_CACHE_VERSION = "v18"
 
 
 @st.cache_resource(show_spinner="Initializing vector store and RAG engine...")
@@ -636,110 +637,185 @@ def _render_citations(citations: list, max_chars: int = 400) -> None:
             )
 
 
+def _sanitize_mermaid_code(code: str) -> str:
+    """Pre-sanitize LLM Mermaid code to eliminate common syntax crashes."""
+    clean = code.strip()
+    clean = re.sub(r"^```mermaid\s*", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"```$", "", clean).strip()
+
+    lines = [ln.rstrip() for ln in clean.splitlines() if ln.strip()]
+    if not lines:
+        return "graph TD\n  Start[\"Start\"] --> End[\"End\"]"
+
+    valid_headers = ("graph ", "flowchart ", "sequencediagram", "classdiagram", "statediagram", "erdiagram", "gantt", "pie", "gitgraph")
+    first_line_lower = lines[0].strip().lower()
+    if not any(first_line_lower.startswith(h) for h in valid_headers):
+        lines.insert(0, "graph TD")
+
+    fixed_lines = [lines[0]]
+    for line in lines[1:]:
+        # Quote node labels if not already quoted
+        def _quote_bracket(m):
+            node_id = m.group(1)
+            b_open = m.group(2)
+            content = m.group(3).strip()
+            b_close = m.group(4)
+            if content.startswith('"') and content.endswith('"'):
+                inner = content[1:-1].replace('"', "'")
+                return f'{node_id}{b_open}"{inner}"{b_close}'
+            safe = content.replace('"', "'").replace("&", "and").replace("<", "lt").replace(">", "gt")
+            return f'{node_id}{b_open}"{safe}"{b_close}'
+
+        l_fixed = re.sub(r'([A-Za-z0-9_\-]+)\s*(\[)([^\]\n]+)(\])', _quote_bracket, line)
+        l_fixed = re.sub(r'([A-Za-z0-9_\-]+)\s*(\()([^\)\n]+)(\))', _quote_bracket, l_fixed)
+        l_fixed = re.sub(r'([A-Za-z0-9_\-]+)\s*(\{)([^\}\n]+)(\})', _quote_bracket, l_fixed)
+        fixed_lines.append(l_fixed)
+
+    return "\n".join(fixed_lines)
+
+
+MERMAID_HTML_TEMPLATE = """<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background-color: #1e1f20;
+      color: #e3e3e3;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 16px 12px;
+      border-radius: 12px;
+      border: 1px solid #3c4043;
+      overflow: auto;
+    }
+    .diagram-header {
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #333537;
+      font-size: 0.82rem;
+      color: #9aa0a6;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .diagram-header .title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #8ab4f8;
+      font-weight: 600;
+    }
+    #mermaid-target {
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 180px;
+    }
+    svg {
+      max-width: 100% !important;
+      height: auto !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="diagram-header">
+    <span class="title">📐 Visual Problem Analysis & Relationships</span>
+    <span>Visual Diagram</span>
+  </div>
+  <div id="mermaid-target">
+    <div style="color: #9aa0a6; font-size: 13px;">Rendering diagram...</div>
+  </div>
+
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+
+    mermaid.initialize({
+      startOnLoad: false,
+      suppressErrorRendering: true,
+      theme: 'dark',
+      securityLevel: 'loose',
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+      themeVariables: {
+        darkMode: true,
+        background: '#1e1f20',
+        primaryColor: '#282a2c',
+        primaryTextColor: '#ffffff',
+        primaryBorderColor: '#8ab4f8',
+        lineColor: '#c58af9',
+        secondaryColor: '#303134',
+        tertiaryColor: '#131314',
+        mainBkg: '#282a2c',
+        nodeBorder: '#8ab4f8',
+        textColor: '#e3e3e3'
+      }
+    });
+
+    const rawCode = __JSON_CODE__;
+    const target = document.getElementById('mermaid-target');
+
+    async function renderMermaid() {
+      try {
+        const renderId = 'm_' + Math.random().toString(36).substring(2, 9);
+        const { svg } = await mermaid.render(renderId, rawCode);
+        target.innerHTML = svg;
+      } catch (err) {
+        console.warn("Primary Mermaid render failed:", err);
+        try {
+          const repaired = rawCode
+            .split('\\n')
+            .map(l => {
+              if (l.trim().match(/^(graph|flowchart|sequenceDiagram|classDiagram)/i)) return l;
+              return l.replace(/([\\[\\(\\{])([^"'\\n\\]\\)\\}]+)([\\]\\)\\}])/g, (m, o, t, c) => `${o}"${t.replace(/"/g, "'").replace(/[<>&]/g, ' ')}"${c}`);
+            })
+            .join('\\n');
+          const repairId = 'm_rep_' + Math.random().toString(36).substring(2, 9);
+          const { svg } = await mermaid.render(repairId, repaired);
+          target.innerHTML = svg;
+        } catch (err2) {
+          console.warn("Mermaid auto-repair failed, showing clean fallback:", err2);
+          const lines = rawCode.split('\\n').filter(l => l.trim() && !l.trim().match(/^(graph|flowchart)/i));
+          const items = lines.map(l => {
+            const cleanLine = l.replace(/[A-Za-z0-9_\\-]+\\s*[\\[\\(\\{]/g, '').replace(/[\\]\\)\\}]/g, '').replace(/-->/g, ' ➔ ').replace(/["']/g, '').trim();
+            return `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:#282a2c;border:1px solid #3c4043;border-radius:8px;margin-bottom:6px;font-size:13px;color:#e3e3e3;"><span style="color:#8ab4f8;">•</span><span>${cleanLine}</span></div>`;
+          }).join('');
+          target.innerHTML = `
+            <div style="width:100%;text-align:left;padding:8px 0;">
+              <div style="color:#8ab4f8;font-weight:600;font-size:13px;margin-bottom:8px;">✦ Problem Logic Flow</div>
+              ${items || '<pre style="color:#9aa0a6;">' + rawCode + '</pre>'}
+            </div>
+          `;
+        }
+      }
+    }
+
+    renderMermaid();
+  </script>
+</body>
+</html>"""
+
+
 def _render_mermaid_diagram(code: str) -> None:
-    """Render a visual Mermaid diagram with Google Gemini dark theme styling and copyable source."""
-    clean_code = code.strip()
-    clean_code = re.sub(r"^```mermaid\s*", "", clean_code, flags=re.IGNORECASE)
-    clean_code = re.sub(r"```$", "", clean_code).strip()
+    """Render a visual Mermaid diagram with Google Gemini dark theme, auto-repair, and error suppression."""
+    clean_code = _sanitize_mermaid_code(code)
+    json_code = json.dumps(clean_code)
 
-    if not clean_code:
-        return
-
-    # Calculate optimal canvas height based on line count
     lines = [line for line in clean_code.splitlines() if line.strip()]
     estimated_height = max(260, min(650, len(lines) * 42 + 130))
 
-    html_code = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <style>
-        * {{
-          box-sizing: border-box;
-          margin: 0;
-          padding: 0;
-        }}
-        body {{
-          background-color: #1e1f20;
-          color: #e3e3e3;
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          padding: 16px 12px;
-          border-radius: 12px;
-          border: 1px solid #3c4043;
-          overflow: auto;
-        }}
-        .diagram-header {{
-          width: 100%;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 14px;
-          padding-bottom: 8px;
-          border-bottom: 1px solid #333537;
-          font-size: 0.82rem;
-          color: #9aa0a6;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-        }}
-        .diagram-header .title {{
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          color: #8ab4f8;
-          font-weight: 600;
-        }}
-        .mermaid {{
-          width: 100%;
-          display: flex;
-          justify-content: center;
-          align-items: center;
-          min-height: 180px;
-        }}
-        svg {{
-          max-width: 100% !important;
-          height: auto !important;
-        }}
-      </style>
-    </head>
-    <body>
-      <div class="diagram-header">
-        <span class="title">📐 Visual Problem Analysis & Relationships</span>
-        <span>Visual Diagram</span>
-      </div>
-      <div class="mermaid">
-{clean_code}
-      </div>
-
-      <script type="module">
-        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-        mermaid.initialize({{
-          startOnLoad: true,
-          theme: 'dark',
-          securityLevel: 'loose',
-          fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-          themeVariables: {{
-            darkMode: true,
-            background: '#1e1f20',
-            primaryColor: '#282a2c',
-            primaryTextColor: '#ffffff',
-            primaryBorderColor: '#8ab4f8',
-            lineColor: '#c58af9',
-            secondaryColor: '#303134',
-            tertiaryColor: '#131314',
-            mainBkg: '#282a2c',
-            nodeBorder: '#8ab4f8',
-            textColor: '#e3e3e3'
-          }}
-        }});
-      </script>
-    </body>
-    </html>
-    """
+    html_code = MERMAID_HTML_TEMPLATE.replace("__JSON_CODE__", json_code)
 
     st.components.v1.html(html_code, height=estimated_height, scrolling=True)
 

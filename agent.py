@@ -41,11 +41,11 @@ STRUCTURE OF EVERY RESPONSE:
 
 3. **Visual Mermaid Diagram (MANDATORY)**:
    - You MUST include at least one valid ```mermaid ... ``` code block in every response.
-   - Use `graph TD` or `graph LR` to visually illustrate:
-     * The step-by-step progression of the solution
-     * Input data flow -> operations -> output
-     * Decision points, algorithm branches, or conceptual hierarchy
-   - Enclose node text containing spaces or punctuation in double quotes (e.g., A["Step 1: Input Data"] --> B["Step 2: Apply Formula"]).
+   - Always start with `graph TD` on the first line.
+   - Use simple single-word alphanumeric node IDs: A, B, C, D or Step1, Step2, Step3.
+   - CRITICAL SYNTAX RULE: ALWAYS put node text in double quotes: `A["Step 1: Hypothesis"] --> B["Step 2: Conclusion"]`.
+   - NEVER use raw parentheses `()`, brackets `[]`, braces `{}`, or math symbols `<`, `>`, `&`, `|` outside of double quotes.
+   - Keep node labels concise (under 10 words per node) and cleanly connected with `-->`.
 
 4. **Summary Takeaway**:
    - Provide a concise summary of the key lesson and exam takeaways the student must remember.
