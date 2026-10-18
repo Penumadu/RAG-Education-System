@@ -431,7 +431,7 @@ st.markdown(
 )
 
 # Cache version — bump to force singleton re-creation when needed
-_CACHE_VERSION = "v19"
+_CACHE_VERSION = "v22"
 
 
 @st.cache_resource(show_spinner="Initializing vector store and RAG engine...")
@@ -457,7 +457,7 @@ def get_agent_service(_rag_engine: RAGEngine, _v: str = _CACHE_VERSION) -> RAGAg
 rag_engine = get_rag_engine(_v=_CACHE_VERSION)
 
 # Guard against stale cached instances: if an old cached RAGEngine lacks new methods, clear cache and rerun
-if not hasattr(rag_engine, "get_indexed_documents"):
+if not hasattr(rag_engine, "check_document_status") or not hasattr(rag_engine, "get_indexed_documents"):
     st.cache_resource.clear()
     st.rerun()
 
@@ -962,13 +962,27 @@ with st.sidebar:
             label_visibility="collapsed",
         )
 
+        def _check_doc_status(engine, fname: str, fbytes: bytes) -> Optional[dict]:
+            if hasattr(engine, "check_document_status"):
+                return engine.check_document_status(fname, file_bytes=fbytes)
+            if hasattr(engine, "get_indexed_documents"):
+                cat = engine.get_indexed_documents()
+                if fname in cat:
+                    return {
+                        "matched_by": "filename",
+                        "filename": fname,
+                        "chunk_count": cat[fname].get("chunk_count", 0),
+                        "page_count": cat[fname].get("page_count", 1),
+                    }
+            return None
+
         already_indexed_files: list[dict] = []
         new_files_to_index: list[str] = []
 
         if uploaded_files:
             for u_file in uploaded_files:
                 file_bytes = u_file.getvalue()
-                match = rag_engine.check_document_status(u_file.name, file_bytes=file_bytes)
+                match = _check_doc_status(rag_engine, u_file.name, file_bytes)
                 if match:
                     already_indexed_files.append({
                         "name": u_file.name,
@@ -1021,7 +1035,7 @@ with st.sidebar:
                     fn = u_file.name
                     file_bytes = u_file.getvalue()
 
-                    match = rag_engine.check_document_status(fn, file_bytes=file_bytes)
+                    match = _check_doc_status(rag_engine, fn, file_bytes)
                     if match:
                         skipped_files.append(fn)
                         continue
