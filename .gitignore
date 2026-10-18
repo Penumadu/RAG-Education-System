@@ -1,0 +1,103 @@
+# ==============================================================================
+# Python & Environment
+# ==============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment Variables & Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ==============================================================================
+# Vector Database & Storage
+# ==============================================================================
+.chroma_data/
+*.sqlite
+*.sqlite3
+chroma.sqlite3
+
+# ==============================================================================
+# Streamlit & Web App Local State
+# ==============================================================================
+.streamlit/secrets.toml
+
+# ==============================================================================
+# Operating System & Editors
+# ==============================================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+
+# Linux
+*~
+
+# IDEs & Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+.claude/
+
+# ==============================================================================
+# Testing, Logs & Temporary Files
+# ==============================================================================
+*.log
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+scratch/
+tmp/
+temp/
+*.tmp
+
+# Local uploaded/temporary test PDF files (keep codebase clean)
+*.pdf
