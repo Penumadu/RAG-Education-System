@@ -104,6 +104,14 @@ st.markdown(
         color: #8ab4f8;
         border: 1px solid rgba(138, 180, 248, 0.28);
     }
+    .gemini-badge-tokens {
+        background: rgba(251, 188, 4, 0.12);
+        color: #fdd663;
+        border: 1px solid rgba(251, 188, 4, 0.32);
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
     .gemini-badge-docs {
         background: rgba(52, 168, 83, 0.12);
         color: #81c995;
@@ -431,7 +439,7 @@ st.markdown(
 )
 
 # Cache version — bump to force singleton re-creation when needed
-_CACHE_VERSION = "v24"
+_CACHE_VERSION = "v25"
 
 
 @st.cache_resource(show_spinner="Initializing vector store and RAG engine...")
@@ -491,6 +499,14 @@ if "thread_id" not in st.session_state:
 
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
+
+if "token_usage" not in st.session_state:
+    st.session_state["token_usage"] = {
+        "last_turn": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "total_prompt_tokens": 0,
+        "total_completion_tokens": 0,
+        "total_tokens": 0,
+    }
 
 if "pending_prompt" not in st.session_state:
     st.session_state["pending_prompt"] = None
@@ -834,8 +850,8 @@ def _render_mermaid_diagram(code: str) -> None:
         st.code(clean_code, language="mermaid")
 
 
-def _render_gemini_response(content: str, citations: list) -> None:
-    """Render assistant answer, splitting markdown text and visual Mermaid diagrams."""
+def _render_gemini_response(content: str, citations: list, token_usage: dict | None = None) -> None:
+    """Render assistant answer, splitting markdown text, visual Mermaid diagrams, citations, and token metrics."""
     pattern = r'(```mermaid\s*[\r\n]+.*?```)'
     parts = re.split(pattern, content, flags=re.DOTALL | re.IGNORECASE)
 
@@ -849,6 +865,12 @@ def _render_gemini_response(content: str, citations: list) -> None:
             st.markdown(part)
 
     _render_citations(citations)
+
+    if token_usage and token_usage.get("total_tokens"):
+        tot = token_usage["total_tokens"]
+        p = token_usage.get("prompt_tokens", 0)
+        c = token_usage.get("completion_tokens", 0)
+        st.caption(f":material/bolt: `{tot:,} tokens` (Input: {p:,} · Output: {c:,})")
 
 
 active_docs = len(st.session_state["indexed_files"])
@@ -1127,6 +1149,12 @@ with st.sidebar:
                     cleared_chunks = rag_engine.clear()
                     st.session_state["indexed_files"] = {}
                     st.session_state["messages"] = []
+                    st.session_state["token_usage"] = {
+                        "last_turn": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                        "total_prompt_tokens": 0,
+                        "total_completion_tokens": 0,
+                        "total_tokens": 0,
+                    }
                     st.session_state["thread_id"] = f"session_{uuid.uuid4().hex[:8]}"
                     st.toast(f"Database wiped ({cleared_chunks} chunks removed).", icon=":material/check_circle:")
                     st.rerun()
@@ -1138,6 +1166,12 @@ with st.sidebar:
 
         if st.button(":material/restart_alt: Clear Chat History", width="stretch"):
             st.session_state["messages"] = []
+            st.session_state["token_usage"] = {
+                "last_turn": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                "total_prompt_tokens": 0,
+                "total_completion_tokens": 0,
+                "total_tokens": 0,
+            }
             st.session_state["thread_id"] = f"session_{uuid.uuid4().hex[:8]}"
             st.toast("Chat history cleared. Course documents remain intact.", icon=":material/refresh:")
             st.rerun()
@@ -1175,9 +1209,14 @@ with st.sidebar:
         st.space("small")
         st.markdown("##### Infrastructure Specs")
         provider_name = "Google Gemini AI" if getattr(rag_engine, "provider", "ollama") == "gemini" else "Local Ollama"
+        tok_data = st.session_state.get("token_usage", {})
+        session_tok = tok_data.get("total_tokens", 0)
+        p_tok = tok_data.get("total_prompt_tokens", 0)
+        c_tok = tok_data.get("total_completion_tokens", 0)
         st.caption(
             f":material/cloud: **Provider:** `{provider_name}`\n\n"
             f":material/smart_toy: **LLM Model:** `{agent_service.model_name}`\n\n"
+            f":material/bolt: **Session Tokens:** `{session_tok:,}` (Input: {p_tok:,} · Output: {c_tok:,})\n\n"
             f":material/search: **Embedding Model:** `{rag_engine.embed_model}`\n\n"
             f":material/folder_open: **Storage Path:** `{rag_engine.persist_directory}`\n\n"
             f":material/speed: **Confidence Threshold:** `{rag_engine.relevance_threshold}`"
@@ -1190,14 +1229,37 @@ active_docs = len(st.session_state["indexed_files"])
 total_chunks = rag_engine.document_count
 
 # Gemini Minimal Top Navigation Bar
+token_usage_data = st.session_state.get("token_usage", {})
+last_turn_dict = token_usage_data.get("last_turn", {})
+last_turn_tokens = last_turn_dict.get("total_tokens", 0)
+last_prompt = last_turn_dict.get("prompt_tokens", 0)
+last_comp = last_turn_dict.get("completion_tokens", 0)
+session_tokens = token_usage_data.get("total_tokens", 0)
+
+if last_turn_tokens > 0:
+    if session_tokens > last_turn_tokens:
+        token_badge_content = f"⚡ {last_turn_tokens:,} tok <span style='opacity: 0.7; font-size: 0.68rem; margin-left: 2px;'>(Total: {session_tokens:,})</span>"
+    else:
+        token_badge_content = f"⚡ {last_turn_tokens:,} tokens"
+    token_tooltip = f"Latest turn: {last_turn_tokens:,} tokens (Input: {last_prompt:,} · Output: {last_comp:,})&#10;Session total: {session_tokens:,} tokens"
+elif session_tokens > 0:
+    token_badge_content = f"⚡ {session_tokens:,} tokens"
+    token_tooltip = f"Session total: {session_tokens:,} tokens"
+else:
+    token_badge_content = "⚡ 0 tokens"
+    token_tooltip = "Token usage will update here for any question you ask"
+
+token_badge_html = f'<span class="gemini-badge gemini-badge-tokens" title="{token_tooltip}">{token_badge_content}</span>'
+
 st.markdown(
     f"""<div class="gemini-nav">
         <div class="gemini-logo">
             <span class="gemini-sparkle">✦</span>
             <span>Professor AI</span>
         </div>
-        <div style="display: flex; gap: 8px;">
+        <div style="display: flex; gap: 8px; align-items: center;">
             <span class="gemini-badge gemini-badge-model">{agent_service.model_name}</span>
+            {token_badge_html}
             <span class="gemini-badge gemini-badge-docs">{active_docs} PDF(s)</span>
         </div>
     </div>""",
@@ -1294,7 +1356,11 @@ for msg in st.session_state["messages"]:
             st.markdown(f"**{msg['content']}**")
     else:
         with st.chat_message("assistant", avatar="✨"):
-            _render_gemini_response(msg["content"], msg.get("citations", []))
+            _render_gemini_response(
+                msg["content"],
+                msg.get("citations", []),
+                msg.get("token_usage"),
+            )
 
 # 4. Process New User Query
 if user_query:
@@ -1317,15 +1383,34 @@ if user_query:
                 status.update(label="Course material search completed", state="complete")
 
         answer = result["answer"]
-        _render_gemini_response(answer, citations)
+        turn_tokens = result.get("token_usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
+        _render_gemini_response(answer, citations, turn_tokens)
 
-        # 3. Save assistant message with citations to history
+        # Update session token usage accumulator
+        tok_state = st.session_state.get("token_usage", {})
+        p_t = int(turn_tokens.get("prompt_tokens", 0))
+        c_t = int(turn_tokens.get("completion_tokens", 0))
+        tot_t = int(turn_tokens.get("total_tokens", p_t + c_t))
+        st.session_state["token_usage"] = {
+            "last_turn": {
+                "prompt_tokens": p_t,
+                "completion_tokens": c_t,
+                "total_tokens": tot_t,
+            },
+            "total_prompt_tokens": tok_state.get("total_prompt_tokens", 0) + p_t,
+            "total_completion_tokens": tok_state.get("total_completion_tokens", 0) + c_t,
+            "total_tokens": tok_state.get("total_tokens", 0) + tot_t,
+        }
+
+        # 3. Save assistant message with citations and tokens to history
         st.session_state["messages"].append(
             {
                 "role": "assistant",
                 "content": answer,
                 "citations": citations,
+                "token_usage": turn_tokens,
             }
         )
+        st.rerun()
 
 

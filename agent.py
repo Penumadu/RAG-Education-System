@@ -211,10 +211,81 @@ class RAGAgentService:
 
         return [error_handling_middleware]
 
+    def _extract_turn_tokens(
+        self,
+        messages: List[BaseMessage],
+        user_question: str = "",
+        answer_text: str = "",
+    ) -> Dict[str, int]:
+        """
+        Extract and aggregate input/output token counts for the latest turn across all AIMessages.
+        Falls back to heuristic character estimation if provider did not include usage metadata.
+        """
+        last_human_idx = -1
+        for idx in range(len(messages) - 1, -1, -1):
+            if isinstance(messages[idx], HumanMessage):
+                last_human_idx = idx
+                break
+
+        current_turn = messages[last_human_idx:] if last_human_idx != -1 else messages
+        ai_messages = [m for m in current_turn if isinstance(m, AIMessage)]
+
+        prompt_tokens = 0
+        completion_tokens = 0
+        found_meta = False
+
+        for msg in ai_messages:
+            # 1. Standard LangChain usage_metadata attribute
+            usage = getattr(msg, "usage_metadata", None)
+            if isinstance(usage, dict) and (usage.get("input_tokens") or usage.get("output_tokens")):
+                prompt_tokens += int(usage.get("input_tokens", 0))
+                completion_tokens += int(usage.get("output_tokens", 0))
+                found_meta = True
+                continue
+
+            # 2. Provider response_metadata (Ollama prompt_eval_count / Google usage_metadata)
+            resp_meta = getattr(msg, "response_metadata", {}) or {}
+            if isinstance(resp_meta, dict):
+                p = resp_meta.get("prompt_eval_count", 0)
+                c = resp_meta.get("eval_count", 0)
+                if p or c:
+                    prompt_tokens += int(p)
+                    completion_tokens += int(c)
+                    found_meta = True
+                    continue
+
+                token_dict = resp_meta.get("token_usage") or resp_meta.get("usage_metadata")
+                if isinstance(token_dict, dict):
+                    p = token_dict.get("prompt_token_count") or token_dict.get("input_tokens") or 0
+                    c = token_dict.get("candidates_token_count") or token_dict.get("output_tokens") or 0
+                    if p or c:
+                        prompt_tokens += int(p)
+                        completion_tokens += int(c)
+                        found_meta = True
+                        continue
+
+        total_tokens = prompt_tokens + completion_tokens
+
+        # Fallback estimation if no usage metadata found from provider
+        if not found_meta or total_tokens == 0:
+            prompt_chars = len(user_question) + sum(
+                len(str(getattr(m, "content", ""))) for m in current_turn if not isinstance(m, AIMessage)
+            )
+            completion_chars = len(answer_text)
+            prompt_tokens = max(1, prompt_chars // 4)
+            completion_tokens = max(1, completion_chars // 4)
+            total_tokens = prompt_tokens + completion_tokens
+
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+
     def ask(self, user_question: str, thread_id: str = "default_session") -> Dict[str, Any]:
         """
         Invoke the agent harness with conversational memory.
-        Returns the final answer and any retrieved citations.
+        Returns the final answer, retrieved citations, and token usage metrics.
         """
         # Clear citations for this turn
         self._latest_citations.clear()
@@ -225,6 +296,7 @@ class RAGAgentService:
                 "answer": "No documents have been uploaded yet. Please upload a PDF first, then ask your question.",
                 "citations": [],
                 "thread_id": thread_id,
+                "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             }
 
         config = {"configurable": {"thread_id": thread_id}}
@@ -256,11 +328,13 @@ class RAGAgentService:
 
             # Snapshot citations captured by the tool during this turn
             citations = list(self._latest_citations)
+            token_usage = self._extract_turn_tokens(messages, user_question, answer_text)
 
             return {
                 "answer": answer_text.strip(),
                 "citations": citations,
                 "thread_id": thread_id,
+                "token_usage": token_usage,
             }
 
         except Exception as e:
@@ -296,10 +370,12 @@ class RAGAgentService:
                             final_msg = messages[-1] if messages else None
                             if final_msg:
                                 ans_text = final_msg.content if isinstance(final_msg.content, str) else str(final_msg.content)
+                                token_usage = self._extract_turn_tokens(messages, user_question, ans_text)
                                 return {
                                     "answer": ans_text.strip(),
                                     "citations": list(self._latest_citations),
                                     "thread_id": thread_id,
+                                    "token_usage": token_usage,
                                 }
                         except Exception as fallback_err:
                             logger.warning("Fallback model '%s' also failed: %s", candidate, fallback_err)
