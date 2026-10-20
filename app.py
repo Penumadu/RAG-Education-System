@@ -439,7 +439,7 @@ st.markdown(
 )
 
 # Cache version — bump to force singleton re-creation when needed
-_CACHE_VERSION = "v25"
+_CACHE_VERSION = "v26"
 
 
 @st.cache_resource(show_spinner="Initializing vector store and RAG engine...")
@@ -1377,7 +1377,9 @@ if user_query:
                 thread_id=st.session_state["thread_id"],
             )
             citations = result.get("citations", [])
-            if citations:
+            if "External Knowledge Notice" in result.get("answer", ""):
+                status.update(label="Course material search completed • Supplemented with external knowledge", state="complete")
+            elif citations:
                 status.update(label=f"Verified with {len(citations)} course excerpt(s)", state="complete")
             else:
                 status.update(label="Course material search completed", state="complete")
